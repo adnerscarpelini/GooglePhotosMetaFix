@@ -1,4 +1,5 @@
 ﻿using Newtonsoft.Json.Linq;
+using System.Text;
 
 class GooglePhotosMetaFix
 {
@@ -15,18 +16,31 @@ class GooglePhotosMetaFix
         var mediaFiles = GetMediaFiles(sourceDirectory);
         Console.WriteLine($"Found {mediaFiles.Count} media files.");
 
-        // Process each media file
-        foreach (var mediaFile in mediaFiles)
-        {
-            ProcessMediaFile(mediaFile);
-        }
+        int successCount = 0;
+        int failureCount = 0;
+        string reportPath = Path.Combine(destinationDirectory, "GooglePhotosMetaFix_Report.csv");
 
-        Console.WriteLine("Processing complete.");
+        using (StreamWriter report = new StreamWriter(reportPath, false, Encoding.UTF8))
+        {
+            // Write CSV header
+            report.WriteLine("File Name;Status;Error Message");
+
+            // Process each media file
+            foreach (var mediaFile in mediaFiles)
+            {
+                bool success = ProcessMediaFile(mediaFile, sourceDirectory, destinationDirectory, report);
+                if (success) successCount++;
+                else failureCount++;
+            }
+
+            Console.WriteLine("------------------------------------------------------");
+            Console.WriteLine($"Total files processed: {mediaFiles.Count}");
+            Console.WriteLine($"✅ Successfully processed: {successCount}");
+            Console.WriteLine($"❌ Failed to process: {failureCount}");
+            Console.WriteLine("Processing complete. Report saved at: " + reportPath);
+        }
     }
 
-    /// <summary>
-    /// Asks the user for a directory path and validates it.
-    /// </summary>
     private static string GetDirectory(string message, bool createIfNotExists = false)
     {
         Console.Write(message);
@@ -47,9 +61,6 @@ class GooglePhotosMetaFix
         return directory;
     }
 
-    /// <summary>
-    /// Retrieves a list of media files from the source directory.
-    /// </summary>
     private static List<string> GetMediaFiles(string sourceDirectory)
     {
         string[] mediaExtensions =
@@ -64,38 +75,60 @@ class GooglePhotosMetaFix
             .ToList();
     }
 
-    /// <summary>
-    /// Processes a media file by finding and applying metadata from its corresponding JSON file.
-    /// </summary>
-    private static void ProcessMediaFile(string mediaFile)
+    private static bool ProcessMediaFile(string mediaFile, string sourceRoot, string destinationRoot, StreamWriter report)
     {
         Console.WriteLine($"Processing: {Path.GetFileName(mediaFile)}");
 
         string jsonFile = FindMetadataFile(mediaFile);
         if (jsonFile == null)
         {
-            Console.WriteLine("❌ No metadata file found.");
-            return;
+            Console.WriteLine("No metadata file found.");
+            report.WriteLine($"{Path.GetFileName(mediaFile)};Failure;No metadata file found");
+            return false;
         }
 
-        Console.WriteLine($"✅ Found metadata file: {Path.GetFileName(jsonFile)}");
+        Console.WriteLine($"Found metadata file: {Path.GetFileName(jsonFile)}");
 
         DateTime? photoTakenDate = ExtractPhotoTakenDate(jsonFile);
         if (photoTakenDate == null)
         {
-            Console.WriteLine("⚠️ Could not extract capture date.");
-            return;
+            Console.WriteLine("Could not extract capture date.");
+            report.WriteLine($"{Path.GetFileName(mediaFile)};Failure;Could not extract capture date");
+            return false;
         }
 
-        Console.WriteLine($"📅 Applying capture date: {photoTakenDate}");
+        Console.WriteLine($"Applying capture date: {photoTakenDate}");
 
         // Apply metadata to file timestamps
         ApplyMetadataToFile(mediaFile, photoTakenDate.Value);
+
+        // Copy file to destination while preserving folder structure
+        string relativePath = Path.GetRelativePath(sourceRoot, mediaFile);
+        string destinationFile = Path.Combine(destinationRoot, relativePath);
+
+        try
+        {
+            // Ensure the destination directory exists
+            string? destinationFolder = Path.GetDirectoryName(destinationFile);
+            if (!Directory.Exists(destinationFolder))
+            {
+                Directory.CreateDirectory(destinationFolder);
+            }
+
+            // Copy the file
+            File.Copy(mediaFile, destinationFile, true);
+            Console.WriteLine("File copied successfully!");
+            report.WriteLine($"{Path.GetFileName(mediaFile)};Success;");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error copying file: {ex.Message}");
+            report.WriteLine($"{Path.GetFileName(mediaFile)};Failure;{ex.Message}");
+            return false;
+        }
     }
 
-    /// <summary>
-    /// Finds the JSON metadata file corresponding to a media file.
-    /// </summary>
     private static string? FindMetadataFile(string mediaFile)
     {
         string directory = Path.GetDirectoryName(mediaFile)!;
@@ -104,9 +137,6 @@ class GooglePhotosMetaFix
         return Directory.GetFiles(directory, $"{fileNameWithoutExtension}*.json").FirstOrDefault();
     }
 
-    /// <summary>
-    /// Extracts the photo taken date from the JSON metadata file.
-    /// </summary>
     private static DateTime? ExtractPhotoTakenDate(string jsonFile)
     {
         try
@@ -121,25 +151,22 @@ class GooglePhotosMetaFix
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"❌ Error reading metadata file: {ex.Message}");
+            Console.WriteLine($"Error reading metadata file: {ex.Message}");
             return null;
         }
     }
 
-    /// <summary>
-    /// Applies extracted metadata (capture date) to the media file.
-    /// </summary>
     private static void ApplyMetadataToFile(string mediaFile, DateTime captureDate)
     {
         try
         {
             File.SetCreationTime(mediaFile, captureDate);
             File.SetLastWriteTime(mediaFile, captureDate);
-            Console.WriteLine("✅ Metadata applied successfully!");
+            Console.WriteLine("Metadata applied successfully!");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"❌ Error applying metadata: {ex.Message}");
+            Console.WriteLine($"Error applying metadata: {ex.Message}");
         }
     }
 }
